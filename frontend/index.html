@@ -1,0 +1,224 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Marks Table Generator</title>
+  
+  <!-- Using the reliable unpkg CDN -->
+  <script src="https://unpkg.com/jspdf@latest/dist/jspdf.umd.min.js"></script>
+  <script src="https://unpkg.com/jspdf-autotable@latest/dist/jspdf.plugin.autotable.js"></script>
+
+  <style>
+    :root {
+      --primary-color: #007bff;
+      --border-color: #dee2e6;
+      --background-color: #f8f9fa;
+      --text-color: #212529;
+      --error-color: #dc3545;
+      --success-color: #28a745;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--background-color); color: var(--text-color); margin: 0; padding: 2rem; display: flex; justify-content: center; }
+    .container { max-width: 95%; background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    h2, h3 { color: var(--primary-color); border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; }
+    .step { border: 1px solid var(--border-color); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 8px; }
+    textarea, input[type="file"] { width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); font-size: 1rem; box-sizing: border-box; margin-top: 0.5rem; }
+    .btn { background-color: var(--primary-color); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; font-size: 1rem; cursor: pointer; transition: background-color 0.2s; margin-top: 1rem; }
+    .btn:disabled { background-color: #a0cffa; cursor: not-allowed; }
+    .btn-export { background-color: var(--success-color); }
+    #loader, #error-display { text-align: center; padding: 1rem; margin-top: 1rem; border-radius: 4px; }
+    #loader { display: none; }
+    #error-display { display: none; color: var(--error-color); background-color: #f8d7da; border: 1px solid #f5c6cb; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; font-size: 0.9em; }
+    th, td { border: 1px solid var(--border-color); padding: 0.5rem; text-align: center; }
+    th { background-color: #f2f2f2; position: sticky; top: 0; z-index: 1; }
+    td input { width: 60px; text-align: center; border: 1px solid #ccc; border-radius: 3px; padding: 4px; }
+    .table-container { max-height: 60vh; overflow: auto; border: 1px solid var(--border-color); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Batch Marks Table Generator</h2>
+    <!-- Steps 1 & 2 (Unchanged) -->
+    <div class="step">
+      <h3>Step 1: Define Assessment Scheme</h3>
+      <textarea id="prompt" rows="4" placeholder="Example: Total 100 marks..."></textarea>
+      <button class="btn" onclick="generateScheme()">Generate Scheme</button>
+    </div>
+    <div class="step">
+      <h3>Step 2: Upload Student Roster (PDF)</h3>
+      <input type="file" id="rosterFile" accept=".pdf" disabled>
+      <button class="btn" id="rosterBtn" onclick="uploadRoster()" disabled>Upload & Generate Table</button>
+    </div>
+    <div id="loader">Processing...</div>
+    <div id="error-display"></div>
+    <!-- Step 3: Marks Entry Table -->
+    <div id="result"></div>
+  </div>
+
+<script>
+    let schemeData = null;
+    let studentData = null;
+    const promptEl = document.getElementById('prompt');
+    const rosterFileEl = document.getElementById('rosterFile');
+    const rosterBtn = document.getElementById('rosterBtn');
+    const loader = document.getElementById('loader');
+    const errorDisplay = document.getElementById('error-display');
+    const resultDiv = document.getElementById('result');
+
+    async function generateScheme() { /* Unchanged */ 
+        if (!promptEl.value.trim()) { alert("Please enter a prompt."); return; }
+        showLoader(true, "Generating scheme...");
+        try {
+            const response = await fetch('http://127.0.0.1:8000/generate-table', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ prompt: promptEl.value })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'An unknown error occurred.');
+            schemeData = data;
+            rosterFileEl.disabled = false;
+            rosterBtn.disabled = false;
+            alert("Scheme generated successfully! Please proceed to Step 2.");
+        } catch (err) {
+            showError(err.message);
+        } finally {
+            showLoader(false);
+        }
+    }
+
+    async function uploadRoster() { /* Unchanged */
+        if (!rosterFileEl.files.length) { alert("Please select a PDF file."); return; }
+        if (!schemeData) { alert("Please generate a scheme first."); return; }
+        showLoader(true, "Parsing PDF and building table...");
+        const formData = new FormData();
+        formData.append('file', rosterFileEl.files[0]);
+        try {
+            const response = await fetch('http://127.0.0.1:8000/upload-roster', { method: 'POST', body: formData });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Failed to parse roster.');
+            studentData = data;
+            renderBatchTable();
+        } catch (err) {
+            showError(err.message);
+        } finally {
+            showLoader(false);
+        }
+    }
+
+    function renderBatchTable() { /* Unchanged */
+        let flatHeaders = [];
+        let mainHeaders = [];
+        schemeData.components.forEach(comp => {
+            if (comp.subcomponents && comp.subcomponents.length > 0) {
+                mainHeaders.push({ title: comp.name, span: comp.subcomponents.length });
+                comp.subcomponents.forEach(sub => flatHeaders.push({ name: sub.name, weight: sub.weight }));
+            } else {
+                mainHeaders.push({ title: comp.name, span: 1 });
+                flatHeaders.push({ name: 'Marks', weight: comp.weight });
+            }
+        });
+        let html = `<h3>Step 3: Enter Marks</h3>`;
+        html += `<div class="table-container"><table id="marks-table">`;
+        html += `<thead><tr><th rowspan="2">USN</th><th rowspan="2">Name</th>`;
+        mainHeaders.forEach(h => { html += `<th colspan="${h.span}">${h.title}</th>`; });
+        html += `<th rowspan="2">Total (${schemeData.total})</th></tr>`;
+        html += `<tr>`;
+        flatHeaders.forEach(fh => { html += `<th>${fh.name} (${fh.weight})</th>`; });
+        html += `</tr></thead><tbody>`;
+        studentData.forEach((student, studentIndex) => {
+            html += `<tr id="row-${studentIndex}"><td>${student.usn}</td><td style="text-align:left;">${student.name}</td>`;
+            flatHeaders.forEach(() => {
+                html += `<td><input type="number" oninput="calculateRowTotal(${studentIndex})" class="mark-input" /></td>`;
+            });
+            html += `<td class="row-total" style="font-weight:bold;">0</td></tr>`;
+        });
+        html += `</tbody></table></div>`;
+        html += `<button class="btn btn-export" onclick="exportToPDF()">Export as PDF</button>`;
+        resultDiv.innerHTML = html;
+    }
+
+    function calculateRowTotal(rowIndex) { /* Unchanged */
+        const row = document.getElementById(`row-${rowIndex}`);
+        const inputs = row.querySelectorAll('.mark-input');
+        let total = 0;
+        inputs.forEach(input => {
+            let val = parseFloat(input.value);
+            if (isNaN(val)) val = 0;
+            total += val;
+        });
+        row.querySelector('.row-total').textContent = total;
+    }
+    
+    function exportToPDF() {
+        if (!document.getElementById('marks-table')) {
+            alert("No table to export.");
+            return;
+        }
+
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'pt' });
+
+            const table = document.getElementById('marks-table');
+            const head = [];
+            const body = [];
+            
+            // --- 1. Manually build the headers from the table ---
+            const headerRow1 = [];
+            table.querySelectorAll('thead tr:first-child th').forEach(th => {
+                headerRow1.push({ content: th.innerText, colSpan: th.colSpan, rowSpan: th.rowSpan, styles: { halign: 'center' } });
+            });
+            const headerRow2 = [];
+            table.querySelectorAll('thead tr:last-child th').forEach(th => {
+                headerRow2.push(th.innerText);
+            });
+            head.push(headerRow1, headerRow2);
+
+            // --- 2. Manually read the body data, INCLUDING INPUT VALUES ---
+            table.querySelectorAll('tbody tr').forEach(tr => {
+                const rowData = [];
+                // Get USN and Name (static text)
+                rowData.push(tr.cells[0].innerText); 
+                rowData.push(tr.cells[1].innerText);
+                // Get values from input boxes
+                tr.querySelectorAll('input.mark-input').forEach(input => {
+                    rowData.push(input.value || '0'); // CRITICAL: Use .value to get the number
+                });
+                // Get calculated total (static text)
+                rowData.push(tr.querySelector('.row-total').innerText); 
+                body.push(rowData);
+            });
+
+            doc.text("Internal Marks Sheet", 40, 40);
+            
+            // --- 3. Pass the clean, manually-built data arrays to autoTable ---
+            doc.autoTable({
+                head: head,
+                body: body,
+                startY: 50,
+                theme: 'grid',
+                styles: { fontSize: 7, cellPadding: 2, halign: 'center' },
+                headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' }
+            });
+
+            doc.save('marks-sheet.pdf');
+        } catch (error) {
+            console.error("Error during PDF generation:", error);
+            alert("An error occurred while generating the PDF. Please check the console for details.");
+        }
+    }
+
+    function showLoader(show, text = "Processing...") { /* Unchanged */
+        loader.textContent = text;
+        loader.style.display = show ? 'block' : 'none';
+        errorDisplay.style.display = 'none';
+    }
+    function showError(message) { /* Unchanged */
+        errorDisplay.textContent = `Error: ${message}`;
+        errorDisplay.style.display = 'block';
+    }
+</script>
+</body>
+</html>
