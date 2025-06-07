@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Batch Marks Table Generator</title>
   
-  <!-- Using the reliable unpkg CDN -->
+  <!-- PDF Export Library -->
   <script src="https://unpkg.com/jspdf@latest/dist/jspdf.umd.min.js"></script>
   <script src="https://unpkg.com/jspdf-autotable@latest/dist/jspdf.plugin.autotable.js"></script>
+  
+  <!-- NEW: Excel (XLSX) Export Library -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 
   <style>
     :root {
@@ -17,15 +20,17 @@
       --text-color: #212529;
       --error-color: #dc3545;
       --success-color: #28a745;
+      --excel-color: #1D6F42; /* NEW */
     }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--background-color); color: var(--text-color); margin: 0; padding: 2rem; display: flex; justify-content: center; }
     .container { max-width: 95%; background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
     h2, h3 { color: var(--primary-color); border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; }
     .step { border: 1px solid var(--border-color); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 8px; }
     textarea, input[type="file"] { width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); font-size: 1rem; box-sizing: border-box; margin-top: 0.5rem; }
-    .btn { background-color: var(--primary-color); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; font-size: 1rem; cursor: pointer; transition: background-color 0.2s; margin-top: 1rem; }
+    .btn { background-color: var(--primary-color); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 4px; font-size: 1rem; cursor: pointer; transition: background-color 0.2s; margin-top: 1rem; margin-right: 0.5rem; }
     .btn:disabled { background-color: #a0cffa; cursor: not-allowed; }
-    .btn-export { background-color: var(--success-color); }
+    .btn-export-pdf { background-color: var(--error-color); } /* Changed PDF button color for distinction */
+    .btn-export-excel { background-color: var(--excel-color); } /* NEW */
     #loader, #error-display { text-align: center; padding: 1rem; margin-top: 1rem; border-radius: 4px; }
     #loader { display: none; }
     #error-display { display: none; color: var(--error-color); background-color: #f8d7da; border: 1px solid #f5c6cb; }
@@ -34,6 +39,7 @@
     th { background-color: #f2f2f2; position: sticky; top: 0; z-index: 1; }
     td input { width: 60px; text-align: center; border: 1px solid #ccc; border-radius: 3px; padding: 4px; }
     .table-container { max-height: 60vh; overflow: auto; border: 1px solid var(--border-color); }
+    .action-buttons { display: flex; gap: 0.5rem; } /* NEW: wrapper for buttons */
   </style>
 </head>
 <body>
@@ -121,10 +127,10 @@
         });
         let html = `<h3>Step 3: Enter Marks</h3>`;
         html += `<div class="table-container"><table id="marks-table">`;
-        html += `<thead><tr><th rowspan="2">USN</th><th rowspan="2">Name</th>`;
+        html += `<thead><tr id="main-header-row"><th rowspan="2">USN</th><th rowspan="2">Name</th>`;
         mainHeaders.forEach(h => { html += `<th colspan="${h.span}">${h.title}</th>`; });
         html += `<th rowspan="2">Total (${schemeData.total})</th></tr>`;
-        html += `<tr>`;
+        html += `<tr id="sub-header-row">`;
         flatHeaders.forEach(fh => { html += `<th>${fh.name} (${fh.weight})</th>`; });
         html += `</tr></thead><tbody>`;
         studentData.forEach((student, studentIndex) => {
@@ -135,7 +141,11 @@
             html += `<td class="row-total" style="font-weight:bold;">0</td></tr>`;
         });
         html += `</tbody></table></div>`;
-        html += `<button class="btn btn-export" onclick="exportToPDF()">Export as PDF</button>`;
+        // --- NEW: Added a wrapper and the new Excel button ---
+        html += `<div class="action-buttons">
+                    <button class="btn btn-export-pdf" onclick="exportToPDF()">Export as PDF</button>
+                    <button class="btn btn-export-excel" onclick="exportToExcel()">Export as Excel</button>
+                 </div>`;
         resultDiv.innerHTML = html;
     }
 
@@ -151,62 +161,75 @@
         row.querySelector('.row-total').textContent = total;
     }
     
-    function exportToPDF() {
+    function exportToPDF() { /* Unchanged */
+        if (!document.getElementById('marks-table')) return alert("No table to export.");
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'pt' });
+            doc.text("Internal Marks Sheet", 40, 40);
+            doc.autoTable({
+                html: '#marks-table',
+                startY: 50,
+                theme: 'grid',
+                styles: { fontSize: 7, cellPadding: 2, halign: 'center' },
+                headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' }
+            });
+            doc.save('marks-sheet.pdf');
+        } catch (error) {
+            console.error("Error during PDF generation:", error);
+            alert("An error occurred while generating the PDF. Please check the console for details.");
+        }
+    }
+
+    // --- NEW FUNCTION TO EXPORT TO EXCEL ---
+    function exportToExcel() {
         if (!document.getElementById('marks-table')) {
             alert("No table to export.");
             return;
         }
 
         try {
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'landscape', unit: 'pt' });
-
             const table = document.getElementById('marks-table');
-            const head = [];
-            const body = [];
             
-            // --- 1. Manually build the headers from the table ---
-            const headerRow1 = [];
-            table.querySelectorAll('thead tr:first-child th').forEach(th => {
-                headerRow1.push({ content: th.innerText, colSpan: th.colSpan, rowSpan: th.rowSpan, styles: { halign: 'center' } });
+            // --- 1. Manually build a data array from the table ---
+            const data = [];
+            
+            // Add the two header rows
+            const header1 = [];
+            document.getElementById('main-header-row').querySelectorAll('th').forEach(th => {
+                header1.push(th.innerText);
             });
-            const headerRow2 = [];
-            table.querySelectorAll('thead tr:last-child th').forEach(th => {
-                headerRow2.push(th.innerText);
+            const header2 = [' ', ' ']; // Empty placeholders for USN/Name in the second row
+            document.getElementById('sub-header-row').querySelectorAll('th').forEach(th => {
+                header2.push(th.innerText);
             });
-            head.push(headerRow1, headerRow2);
+            header2.push(' '); // Empty placeholder for Total
+            data.push(header1, header2);
 
-            // --- 2. Manually read the body data, INCLUDING INPUT VALUES ---
+            // Add the body rows
             table.querySelectorAll('tbody tr').forEach(tr => {
                 const rowData = [];
-                // Get USN and Name (static text)
-                rowData.push(tr.cells[0].innerText); 
-                rowData.push(tr.cells[1].innerText);
-                // Get values from input boxes
+                rowData.push(tr.cells[0].innerText); // USN
+                rowData.push(tr.cells[1].innerText); // Name
                 tr.querySelectorAll('input.mark-input').forEach(input => {
-                    rowData.push(input.value || '0'); // CRITICAL: Use .value to get the number
+                    // Store as numbers for Excel
+                    rowData.push(input.value ? Number(input.value) : 0); 
                 });
-                // Get calculated total (static text)
-                rowData.push(tr.querySelector('.row-total').innerText); 
-                body.push(rowData);
+                rowData.push(Number(tr.querySelector('.row-total').innerText)); // Total
+                data.push(rowData);
             });
 
-            doc.text("Internal Marks Sheet", 40, 40);
-            
-            // --- 3. Pass the clean, manually-built data arrays to autoTable ---
-            doc.autoTable({
-                head: head,
-                body: body,
-                startY: 50,
-                theme: 'grid',
-                styles: { fontSize: 7, cellPadding: 2, halign: 'center' },
-                headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' }
-            });
+            // --- 2. Create a worksheet and a workbook ---
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Marks");
 
-            doc.save('marks-sheet.pdf');
+            // --- 3. Trigger the download ---
+            XLSX.writeFile(wb, "MarksSheet.xlsx");
+
         } catch (error) {
-            console.error("Error during PDF generation:", error);
-            alert("An error occurred while generating the PDF. Please check the console for details.");
+            console.error("Error during Excel generation:", error);
+            alert("An error occurred while generating the Excel file.");
         }
     }
 
